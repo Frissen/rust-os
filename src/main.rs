@@ -15,8 +15,8 @@ use alloc::{boxed::Box, vec::Vec};
 use bootloader::{entry_point, BootInfo};
 use core::panic::PanicInfo;
 use rust_os::{
-    allocator, memory, println, serial_println,
-    task::{executor::Executor, keyboard, Task},
+    allocator, memory, println, serial_println, shell,
+    task::{executor::Executor, Task},
 };
 use x86_64::VirtAddr;
 
@@ -54,6 +54,10 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     allocator::init_heap(&mut mapper, &mut frame_allocator)
         .expect("heap initialization failed");
 
+    // Cache the firmware-reported RAM size now, while we still own the
+    // allocator borrow — the shell will read this through a static.
+    memory::record_stats(&frame_allocator);
+
     // Smoke-test the allocator end to end. If any of these panic we've broken
     // the heap, and the panic handler will tell us why on screen.
     let boxed = Box::new(0x4242_u32);
@@ -73,23 +77,14 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     #[cfg(test)]
     test_main();
 
-    println!("kernel initialised - type on the keyboard:");
     serial_println!("kernel initialised");
 
-    // Hand control to the cooperative executor. From here on, everything
-    // user-facing is a task: the keyboard echo, future shell, etc. The
-    // executor never returns — when no task is runnable, it hlts.
+    // Hand control to the cooperative executor and start the shell as the
+    // root task. The executor never returns — when the shell is idle
+    // waiting on input, the CPU hlts until the next IRQ.
     let mut executor = Executor::new();
-    executor.spawn(Task::new(keyboard::print_keypresses()));
-    executor.spawn(Task::new(announce_tasks()));
+    executor.spawn(Task::new(shell::run()));
     executor.run();
-}
-
-/// Tiny example of a second concurrent task. Prints a one-shot banner so the
-/// VGA output proves multiple tasks really do interleave on the executor.
-async fn announce_tasks() {
-    println!("async: executor running with multiple tasks");
-    serial_println!("async: executor running");
 }
 
 /// Called on any unrecoverable kernel panic in non-test builds.

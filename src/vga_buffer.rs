@@ -123,6 +123,30 @@ impl Writer {
     pub fn set_color(&mut self, foreground: Color, background: Color) {
         self.color_code = ColorCode::new(foreground, background);
     }
+
+    /// Erase the last printed character on the current row and step the
+    /// cursor back. Used by the shell's backspace key. No-op at column 0.
+    pub fn backspace(&mut self) {
+        if self.column_position == 0 {
+            return;
+        }
+        self.column_position -= 1;
+        let row = BUFFER_HEIGHT - 1;
+        let blank = ScreenChar {
+            ascii_character: b' ',
+            color_code: self.color_code,
+        };
+        self.buffer.chars[row][self.column_position].write(blank);
+    }
+
+    /// Blank every cell in the buffer and reset the cursor to the bottom-left.
+    /// Used by the shell's `clear` command.
+    pub fn clear_screen(&mut self) {
+        for row in 0..BUFFER_HEIGHT {
+            self.clear_row(row);
+        }
+        self.column_position = 0;
+    }
 }
 
 impl fmt::Write for Writer {
@@ -151,6 +175,22 @@ macro_rules! print {
 macro_rules! println {
     () => ($crate::print!("\n"));
     ($($arg:tt)*) => ($crate::print!("{}\n", format_args!($($arg)*)));
+}
+
+/// Erase one character at the current cursor position. Interrupt-safe wrapper
+/// around `Writer::backspace`.
+pub fn backspace() {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        WRITER.lock().backspace();
+    });
+}
+
+/// Clear the entire VGA buffer. Interrupt-safe wrapper around
+/// `Writer::clear_screen`.
+pub fn clear_screen() {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        WRITER.lock().clear_screen();
+    });
 }
 
 #[doc(hidden)]

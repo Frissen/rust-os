@@ -53,3 +53,10 @@ pub fn init_heap(
 
     Ok(())
 }
+
+/// Snapshot of heap usage. Cheap (just locks the global allocator briefly).
+/// Used by the `mem` shell command.
+pub fn heap_stats() -> (usize, usize, usize) {
+    let heap = ALLOCATOR.lock();
+    (heap.used(), heap.free(), heap.size())
+}
