@@ -8,13 +8,14 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/Frissen/rust-os"
 
 [dependencies]
-bootloader = "0.9.29"
+bootloader = { version = "0.9.29", features = ["map_physical_memory"] }
 volatile = "0.2.6"
 spin = "0.5.2"
 x86_64 = "=0.14.10"
 uart_16550 = "0.2.18"
 pic8259 = "0.10.4"
 pc-keyboard = "0.7.0"
+linked_list_allocator = "0.10.5"
 
 [dependencies.lazy_static]
 version = "1.4.0"
