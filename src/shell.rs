@@ -9,8 +9,13 @@
 // line editor — see `dispatch` for the registry.
 
 use crate::{
-    allocator, interrupts::TICKS, memory::TOTAL_USABLE_BYTES, print, println, serial_println,
-    task::keyboard::ScancodeStream, vga_buffer,
+    allocator,
+    interrupts::TICKS,
+    memory::TOTAL_USABLE_BYTES,
+    print, println, serial_println,
+    task::keyboard::ScancodeStream,
+    vfs::{self, FS},
+    vga_buffer,
 };
 use alloc::{string::String, vec::Vec};
 use core::sync::atomic::Ordering;
@@ -113,6 +118,14 @@ fn dispatch(line: &str) {
         "panic" => cmd_panic(&args),
         "reboot" => cmd_reboot(),
         "exception" | "int3" => cmd_breakpoint(),
+        "pwd" => cmd_pwd(),
+        "ls" => cmd_ls(&args),
+        "cat" => cmd_cat(&args),
+        "mkdir" => cmd_mkdir(&args),
+        "touch" => cmd_touch(&args),
+        "rm" => cmd_rm(&args),
+        "cd" => cmd_cd(&args),
+        "write" => cmd_write(&args),
         other => println!("luxx: {}: command not found (try 'help')", other),
     }
 }
@@ -127,6 +140,14 @@ fn cmd_help() {
     println!("  uname [-a]          print kernel info");
     println!("  mem                 show RAM and heap usage");
     println!("  uptime              time since boot");
+    println!("  pwd                 print current directory");
+    println!("  ls [path]           list directory contents");
+    println!("  cd <path>           change current directory");
+    println!("  cat <path>          print file contents");
+    println!("  mkdir <path>        create a directory");
+    println!("  touch <path>        create an empty file");
+    println!("  write <path> <txt>  write text into a file");
+    println!("  rm [-r] <path>      remove a file or directory");
     println!("  int3                fire a software breakpoint exception");
     println!("  panic [msg]         deliberately panic the kernel");
     println!("  reboot              reset the machine");
@@ -223,4 +244,105 @@ fn cmd_reboot() {
 fn cmd_breakpoint() {
     x86_64::instructions::interrupts::int3();
     println!("(returned from breakpoint exception)");
+}
+
+// ---------- VFS commands ----------
+
+fn cmd_pwd() {
+    let cwd = FS.lock().pwd();
+    println!("{}", cwd);
+}
+
+fn cmd_ls(args: &[&str]) {
+    let path = args.first().copied().unwrap_or(".");
+    let result = FS.lock().list(path);
+    match result {
+        Ok(entries) => {
+            let out = vfs::format_listing(&entries);
+            print!("{}", out);
+        }
+        Err(e) => println!("ls: {}: {}", path, e.description()),
+    }
+}
+
+fn cmd_cat(args: &[&str]) {
+    if args.is_empty() {
+        println!("cat: missing operand");
+        return;
+    }
+    for &path in args {
+        match FS.lock().read_file(path) {
+            Ok(bytes) => {
+                // Treat the byte vector as text; non-printable bytes are
+                // dropped by the VGA writer's CP437 substitution. That's
+                // fine for now; we don't have a `od` command yet.
+                for b in bytes {
+                    let buf = [b];
+                    let s = core::str::from_utf8(&buf).unwrap_or("?");
+                    print!("{}", s);
+                }
+            }
+            Err(e) => println!("cat: {}: {}", path, e.description()),
+        }
+    }
+}
+
+fn cmd_mkdir(args: &[&str]) {
+    if args.is_empty() {
+        println!("mkdir: missing operand");
+        return;
+    }
+    for &path in args {
+        if let Err(e) = FS.lock().mkdir(path) {
+            println!("mkdir: {}: {}", path, e.description());
+        }
+    }
+}
+
+fn cmd_touch(args: &[&str]) {
+    if args.is_empty() {
+        println!("touch: missing operand");
+        return;
+    }
+    for &path in args {
+        if let Err(e) = FS.lock().touch(path) {
+            println!("touch: {}: {}", path, e.description());
+        }
+    }
+}
+
+fn cmd_rm(args: &[&str]) {
+    // Trivial flag parse: leading `-r` enables recursive remove.
+    let (recursive, paths) = match args.split_first() {
+        Some((&"-r", rest)) | Some((&"-rf", rest)) => (true, rest),
+        _ => (false, args),
+    };
+    if paths.is_empty() {
+        println!("rm: missing operand");
+        return;
+    }
+    for &path in paths {
+        if let Err(e) = FS.lock().remove(path, recursive) {
+            println!("rm: {}: {}", path, e.description());
+        }
+    }
+}
+
+fn cmd_cd(args: &[&str]) {
+    let path = args.first().copied().unwrap_or("/");
+    if let Err(e) = FS.lock().chdir(path) {
+        println!("cd: {}: {}", path, e.description());
+    }
+}
+
+fn cmd_write(args: &[&str]) {
+    if args.len() < 2 {
+        println!("write: usage: write <path> <text...>");
+        return;
+    }
+    let path = args[0];
+    let contents = args[1..].join(" ");
+    if let Err(e) = FS.lock().write_file(path, contents.as_bytes()) {
+        println!("write: {}: {}", path, e.description());
+    }
 }
