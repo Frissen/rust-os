@@ -13,6 +13,7 @@
 // allocate.
 
 use bootloader::bootinfo::{MemoryMap, MemoryRegionType};
+use core::sync::atomic::{AtomicU64, Ordering};
 use x86_64::{
     registers::control::Cr3,
     structures::paging::{
@@ -20,6 +21,17 @@ use x86_64::{
     },
     PhysAddr, VirtAddr,
 };
+
+/// Cached snapshot of `BootInfoFrameAllocator::total_usable_bytes()`, so the
+/// `mem` shell command can read RAM size without holding the allocator. Set
+/// once at boot in `record_stats`.
+pub static TOTAL_USABLE_BYTES: AtomicU64 = AtomicU64::new(0);
+
+/// Capture stats from `allocator` into the global atomics. Must be called
+/// once, after the frame allocator is initialised.
+pub fn record_stats(allocator: &BootInfoFrameAllocator) {
+    TOTAL_USABLE_BYTES.store(allocator.total_usable_bytes(), Ordering::Relaxed);
+}
 
 /// Build an `OffsetPageTable` rooted at the CPU's current CR3 table.
 ///

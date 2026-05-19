@@ -3,11 +3,17 @@
 // The CPU uses the IDT to dispatch on vectors 0-255: CPU exceptions occupy 0-31
 // and external/hardware interrupts are remapped to 32-47 by the legacy 8259
 // PIC pair (see `PIC_1_OFFSET`).
-use crate::{gdt, hlt_loop, print, println};
+use crate::{gdt, hlt_loop, println};
+use core::sync::atomic::{AtomicU64, Ordering};
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
 use spin;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
+
+/// Free-running tick counter, incremented on every PIT timer IRQ (~18.2 Hz on
+/// the default channel-0 reload). Cheap to read from anywhere; used by the
+/// `uptime` shell command.
+pub static TICKS: AtomicU64 = AtomicU64::new(0);
 
 // Map PIC1 -> 32..40 and PIC2 -> 40..48 so they don't collide with CPU
 // exception vectors (0..32) which are reserved by Intel.
@@ -83,7 +89,9 @@ extern "x86-interrupt" fn page_fault_handler(
 }
 
 extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
-    print!(".");
+    // No printing here — keep ISR fast so the shell prompt stays clean. The
+    // `uptime` command reads this counter to report elapsed time.
+    TICKS.fetch_add(1, Ordering::Relaxed);
     // The PIC won't deliver another timer IRQ until we explicitly acknowledge
     // this one with an End-Of-Interrupt.
     unsafe {
