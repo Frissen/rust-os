@@ -14,7 +14,10 @@ extern crate alloc;
 use alloc::{boxed::Box, vec::Vec};
 use bootloader::{entry_point, BootInfo};
 use core::panic::PanicInfo;
-use rust_os::{memory, allocator, println, serial_println};
+use rust_os::{
+    allocator, memory, println, serial_println,
+    task::{executor::Executor, keyboard, Task},
+};
 use x86_64::VirtAddr;
 
 // Register `kernel_main` as the bootloader entry point. This generates the
@@ -72,7 +75,21 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 
     println!("kernel initialised - type on the keyboard:");
     serial_println!("kernel initialised");
-    rust_os::hlt_loop();
+
+    // Hand control to the cooperative executor. From here on, everything
+    // user-facing is a task: the keyboard echo, future shell, etc. The
+    // executor never returns — when no task is runnable, it hlts.
+    let mut executor = Executor::new();
+    executor.spawn(Task::new(keyboard::print_keypresses()));
+    executor.spawn(Task::new(announce_tasks()));
+    executor.run();
+}
+
+/// Tiny example of a second concurrent task. Prints a one-shot banner so the
+/// VGA output proves multiple tasks really do interleave on the executor.
+async fn announce_tasks() {
+    println!("async: executor running with multiple tasks");
+    serial_println!("async: executor running");
 }
 
 /// Called on any unrecoverable kernel panic in non-test builds.

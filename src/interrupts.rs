@@ -93,32 +93,16 @@ extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFr
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
-    use pc_keyboard::{layouts, DecodedKey, HandleControl, Keyboard, ScancodeSet1};
     use x86_64::instructions::port::Port;
 
-    lazy_static! {
-        static ref KEYBOARD: spin::Mutex<Keyboard<layouts::Us104Key, ScancodeSet1>> =
-            spin::Mutex::new(Keyboard::new(
-                ScancodeSet1::new(),
-                layouts::Us104Key,
-                HandleControl::Ignore
-            ));
-    }
-
-    let mut keyboard = KEYBOARD.lock();
     // Read the raw scancode from the PS/2 controller's data port. The
     // controller buffers exactly one byte per IRQ1, so we always read once.
     let mut port = Port::new(0x60);
     let scancode: u8 = unsafe { port.read() };
 
-    if let Ok(Some(key_event)) = keyboard.add_byte(scancode) {
-        if let Some(key) = keyboard.process_keyevent(key_event) {
-            match key {
-                DecodedKey::Unicode(character) => print!("{}", character),
-                DecodedKey::RawKey(key) => print!("{:?}", key),
-            }
-        }
-    }
+    // Hand the byte to the async pipeline (lock-free queue + waker). Decode
+    // happens on a normal task, not in ISR context.
+    crate::task::keyboard::add_scancode(scancode);
 
     unsafe {
         PICS.lock()
