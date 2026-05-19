@@ -18,6 +18,7 @@ use core::{
 
 pub mod executor;
 pub mod keyboard;
+pub mod tick;
 
 /// Process-id–like handle for a task. Just a strictly increasing counter; we
 /// use it to key the executor's task table and to wake by id.

@@ -107,6 +107,8 @@ extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFr
     // No printing here — keep ISR fast so the shell prompt stays clean. The
     // `uptime` command reads this counter to report elapsed time.
     TICKS.fetch_add(1, Ordering::Relaxed);
+    // Wake the desktop clock task once a second (wait-free).
+    crate::task::tick::notify_tick();
     // The PIC won't deliver another timer IRQ until we explicitly acknowledge
     // this one with an End-Of-Interrupt.
     unsafe {

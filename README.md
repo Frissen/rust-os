@@ -1,26 +1,29 @@
-# rust-os
+# AiOC
 
-A minimal x86_64 kernel written in Rust, built by following [Writing an OS in
-Rust](https://os.phil-opp.com/) (Second Edition). It boots on bare metal (or
-QEMU), prints to the VGA text buffer, handles CPU exceptions through an IDT,
-survives double faults via a dedicated IST stack, and forwards PS/2 keyboard
-input through a remapped 8259 PIC.
+> An x86_64 OS kernel in Rust with a Windows-3.x styled TUI desktop.
+
+`AiOC` boots on bare metal (or QEMU), paints a windowed desktop in the VGA text
+buffer (taskbar, "Start" button, live clock), and runs an in-kernel shell with
+an in-memory filesystem inside the foreground window. It started as a
+[blog_os](https://os.phil-opp.com/)-style minimal kernel and grew through five
+build-out phases (memory, async executor, shell, VFS, drivers) plus the GUI
+phase that gave it its current look.
 
 ## What's inside
 
-| Subsystem | File | Notes |
-|-----------|------|-------|
-| Freestanding binary | `src/main.rs` | `no_std`, `no_main`, custom panic handler |
-| Kernel library | `src/lib.rs` | Shared by `main` + integration tests, custom test runner |
-| VGA text mode | `src/vga_buffer.rs` | `println!` macro backed by `0xb8000`, with colour support |
-| 16550 UART | `src/serial.rs` | `serial_println!` for headless logging via QEMU `-serial stdio` |
-| GDT + TSS | `src/gdt.rs` | Loads our own code segment, exposes an IST stack for double faults |
-| IDT + handlers | `src/interrupts.rs` | Breakpoint, double fault, page fault, timer, keyboard |
-| Tests | `tests/basic_boot.rs`, `tests/should_panic.rs` | Integration tests that exit QEMU via `isa-debug-exit` |
+| Phase | Subsystem | Files |
+|-------|-----------|-------|
+| 1 — Foundation | Boot, VGA, GDT/TSS, IDT, PIC, keyboard | `src/{main,lib,vga_buffer,serial,gdt,interrupts}.rs` |
+| 2 — Memory | Paging, frame allocator, heap (enables `alloc`) | `src/{memory,allocator}.rs` |
+| 3 — Async | Cooperative executor, ISR↔task queue, wakers | `src/task/` |
+| 4 — Shell | Line editor + dispatch (17 commands) | `src/shell.rs` |
+| 5 — VFS | In-memory hierarchical FS (`BTreeMap`-based) | `src/vfs.rs` |
+| 6 — Drivers | CMOS RTC, 100 Hz PIT | `src/drivers/` |
+| 7 — Desktop | Window chrome, taskbar, clock task, boot splash | `src/desktop.rs`, `src/task/tick.rs` |
 
-The bootloader is the [`bootloader`](https://crates.io/crates/bootloader)
-crate (0.9.x branch — BIOS, not UEFI). `bootimage` glues the kernel and
-bootloader into a single bootable disk image.
+The bootloader is the [`bootloader`](https://crates.io/crates/bootloader) crate
+(0.9.x branch — BIOS, not UEFI). `bootimage` glues the kernel and bootloader
+into a single bootable disk image.
 
 ## Prerequisites
 
@@ -43,23 +46,30 @@ make setup
 make run
 ```
 
-You should see:
+On boot you'll briefly see the AiOC splash, then the desktop comes up:
 
 ```
-LUXX-OS booting...
-hello, world!
-EXCEPTION: BREAKPOINT
-InterruptStackFrame {
-    ...
-}
-kernel initialised - type on the keyboard:
-.................
+░ AiOC ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+╔══════════════════════════════════════════════════════════════════════════════╗
+║ ░ Terminal - AiOC                                              [ _ ][ O ][ X ]║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║ AiOC 0.1.0 -- type 'help' for commands                                       ║
+║ (c) 2026 - x86_64 kernel in Rust                                             ║
+║ AiOC>                                                                        ║
+║                                                                              ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+▓ Start ▓ │ ▶ Terminal - AiOC                                  Tue 10:30:45
 ```
 
-Dots are the timer IRQ at PIC vector 0x20. Typing on the keyboard produces
-characters via PS/2 scancode set 1 decoded through `pc-keyboard`.
+The clock on the right of the taskbar advances every second, driven by a
+dedicated async task on the kernel executor that subscribes to a one-Hz
+notification stream out of the 100 Hz PIT ISR.
 
-To exit QEMU: `Ctrl-A` then `x`.
+Click into the QEMU window and type commands like `help`, `uname -a`, `mem`,
+`uptime`, `date`, `ls`, `cat /etc/motd`, `mkdir /home/me`, `write /home/me/x hi`.
+
+To exit QEMU: close the window, or `Ctrl-A` then `x` on the console.
 
 ## Headless run (no display)
 
@@ -67,7 +77,9 @@ To exit QEMU: `Ctrl-A` then `x`.
 make run-headless
 ```
 
-Output is mirrored to the host terminal over the serial port.
+Boot logs are mirrored to the host terminal over the serial port (the splash
+and desktop chrome are VGA-only, so they don't show up here — only kernel log
+lines do).
 
 ## Tests
 
@@ -93,29 +105,6 @@ you can ship a single bootable `.bin`. It works with a pinned nightly Rust
 
 If you'd rather use the newer (UEFI-capable) `bootloader_api` 0.11+ pipeline,
 that's a separate effort and changes the project structure significantly.
-
-## Layout
-
-```
-.
-├── Cargo.toml             # Kernel crate + bootimage test config
-├── Makefile               # setup / build / run / test wrappers
-├── README.md
-├── rust-toolchain.toml    # Pinned nightly Rust + components
-├── x86_64-rust_os.json    # Custom bare-metal target triple
-├── .cargo/config.toml     # build-std + bootimage runner config
-├── scripts/setup.sh       # One-shot toolchain + patch installer
-├── src/
-│   ├── main.rs
-│   ├── lib.rs
-│   ├── vga_buffer.rs
-│   ├── serial.rs
-│   ├── gdt.rs
-│   └── interrupts.rs
-└── tests/
-    ├── basic_boot.rs
-    └── should_panic.rs
-```
 
 ## License
 

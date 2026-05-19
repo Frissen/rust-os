@@ -9,12 +9,12 @@
 // line editor — see `dispatch` for the registry.
 
 use crate::{
-    allocator,
+    allocator, desktop,
     drivers::rtc,
     interrupts::{timer_hz, TICKS},
     memory::TOTAL_USABLE_BYTES,
     print, println, serial_println,
-    task::keyboard::ScancodeStream,
+    task::{keyboard::ScancodeStream, tick::SecondStream},
     vfs::{self, FS},
     vga_buffer,
 };
@@ -23,8 +23,8 @@ use core::sync::atomic::Ordering;
 use futures_util::stream::StreamExt;
 use pc_keyboard::{layouts, DecodedKey, HandleControl, KeyCode, Keyboard, ScancodeSet1};
 
-const PROMPT: &str = "luxx> ";
-const KERNEL_NAME: &str = "LUXX-OS";
+const PROMPT: &str = "AiOC> ";
+const KERNEL_NAME: &str = "AiOC";
 const KERNEL_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Hard cap on input line length. Keeps the line editor's buffer small and
@@ -89,8 +89,9 @@ pub async fn run() {
 }
 
 fn print_banner() {
-    println!();
     println!("{} {} -- type 'help' for commands", KERNEL_NAME, KERNEL_VERSION);
+    println!("(c) 2026 - x86_64 kernel in Rust");
+    println!();
 }
 
 fn redraw_prompt() {
@@ -126,32 +127,18 @@ fn dispatch(line: &str) {
         "rm" => cmd_rm(&args),
         "cd" => cmd_cd(&args),
         "write" => cmd_write(&args),
-        other => println!("luxx: {}: command not found (try 'help')", other),
+        other => println!("aioc: {}: command not found (try 'help')", other),
     }
 }
 
 // ---------- Commands ----------
 
 fn cmd_help() {
-    println!("Built-in commands:");
-    println!("  help                this list");
-    println!("  clear               clear the screen");
-    println!("  echo <args...>      print arguments");
-    println!("  uname [-a]          print kernel info");
-    println!("  mem                 show RAM and heap usage");
-    println!("  uptime              time since boot");
-    println!("  date                wall-clock time from CMOS RTC");
-    println!("  pwd                 print current directory");
-    println!("  ls [path]           list directory contents");
-    println!("  cd <path>           change current directory");
-    println!("  cat <path>          print file contents");
-    println!("  mkdir <path>        create a directory");
-    println!("  touch <path>        create an empty file");
-    println!("  write <path> <txt>  write text into a file");
-    println!("  rm [-r] <path>      remove a file or directory");
-    println!("  int3                fire a software breakpoint exception");
-    println!("  panic [msg]         deliberately panic the kernel");
-    println!("  reboot              reset the machine");
+    println!("AiOC commands:");
+    println!("  help, clear, echo, uname [-a], mem, uptime, date");
+    println!("  pwd, ls [p], cd <p>, cat <p>, mkdir <p>, touch <p>");
+    println!("  write <p> <txt>, rm [-r] <p>");
+    println!("  int3, panic [msg], reboot");
 }
 
 fn cmd_clear() {
@@ -351,5 +338,18 @@ fn cmd_write(args: &[&str]) {
     let contents = args[1..].join(" ");
     if let Err(e) = FS.lock().write_file(path, contents.as_bytes()) {
         println!("write: {}: {}", path, e.description());
+    }
+}
+
+// ---------- Background tasks ----------
+
+/// Re-paints the taskbar clock once per second. Spawned alongside the shell
+/// task from `kernel_main`. Never returns.
+pub async fn clock_task() {
+    let mut ticks = SecondStream::new();
+    // Paint once up front so the clock isn't blank for the first second.
+    desktop::paint_clock();
+    while let Some(_) = ticks.next().await {
+        desktop::paint_clock();
     }
 }
