@@ -10,10 +10,25 @@ use pic8259::ChainedPics;
 use spin;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 
-/// Free-running tick counter, incremented on every PIT timer IRQ (~18.2 Hz on
-/// the default channel-0 reload). Cheap to read from anywhere; used by the
-/// `uptime` shell command.
+/// Free-running tick counter, incremented on every PIT timer IRQ. Cheap to
+/// read from anywhere; used by the `uptime` shell command.
 pub static TICKS: AtomicU64 = AtomicU64::new(0);
+
+/// Actual PIT channel-0 firing rate in Hz, expressed as the bit pattern of an
+/// f64. Filled in by `lib::init` after it programmes the PIT.
+pub static TIMER_HZ_BITS: AtomicU64 = AtomicU64::new(0);
+
+/// Read the currently-configured timer frequency as an f64. Returns ~18.2 if
+/// the timer hasn't been explicitly reprogrammed yet.
+pub fn timer_hz() -> f64 {
+    let bits = TIMER_HZ_BITS.load(Ordering::Relaxed);
+    if bits == 0 {
+        // Default channel-0 reload of 0 -> 1.193182 MHz / 65536.
+        18.2065
+    } else {
+        f64::from_bits(bits)
+    }
+}
 
 // Map PIC1 -> 32..40 and PIC2 -> 40..48 so they don't collide with CPU
 // exception vectors (0..32) which are reserved by Intel.

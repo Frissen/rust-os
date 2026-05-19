@@ -10,7 +10,8 @@
 
 use crate::{
     allocator,
-    interrupts::TICKS,
+    drivers::rtc,
+    interrupts::{timer_hz, TICKS},
     memory::TOTAL_USABLE_BYTES,
     print, println, serial_println,
     task::keyboard::ScancodeStream,
@@ -25,9 +26,7 @@ use pc_keyboard::{layouts, DecodedKey, HandleControl, KeyCode, Keyboard, Scancod
 const PROMPT: &str = "luxx> ";
 const KERNEL_NAME: &str = "LUXX-OS";
 const KERNEL_VERSION: &str = env!("CARGO_PKG_VERSION");
-/// PIT default reload divisor 0 -> ~1.193182 MHz / 65536 ~= 18.2065 Hz. Used
-/// to convert the raw tick counter into seconds for `uptime`.
-const TIMER_HZ: f64 = 18.2065;
+
 /// Hard cap on input line length. Keeps the line editor's buffer small and
 /// prevents a runaway "type forever" from filling the heap.
 const MAX_LINE_LEN: usize = 256;
@@ -118,6 +117,7 @@ fn dispatch(line: &str) {
         "panic" => cmd_panic(&args),
         "reboot" => cmd_reboot(),
         "exception" | "int3" => cmd_breakpoint(),
+        "date" | "time" => cmd_date(),
         "pwd" => cmd_pwd(),
         "ls" => cmd_ls(&args),
         "cat" => cmd_cat(&args),
@@ -140,6 +140,7 @@ fn cmd_help() {
     println!("  uname [-a]          print kernel info");
     println!("  mem                 show RAM and heap usage");
     println!("  uptime              time since boot");
+    println!("  date                wall-clock time from CMOS RTC");
     println!("  pwd                 print current directory");
     println!("  ls [path]           list directory contents");
     println!("  cd <path>           change current directory");
@@ -195,16 +196,22 @@ fn cmd_mem() {
     );
 }
 
+fn cmd_date() {
+    let now = rtc::now();
+    println!("{}", now);
+}
+
 fn cmd_uptime() {
     let ticks = TICKS.load(Ordering::Relaxed);
-    let seconds = ticks as f64 / TIMER_HZ;
+    let hz = timer_hz();
+    let seconds = ticks as f64 / hz;
     // Format manually to avoid pulling in the `f64::round` MSRV nuance and to
     // keep output stable across nightlies.
     let whole = seconds as u64;
     let hundredths = ((seconds - whole as f64) * 100.0) as u64;
     println!(
         "up {} ticks ({}.{:02}s @ {:.2} Hz)",
-        ticks, whole, hundredths, TIMER_HZ
+        ticks, whole, hundredths, hz
     );
 }
 
