@@ -12,6 +12,7 @@ extern crate alloc;
 use core::panic::PanicInfo;
 
 pub mod allocator;
+pub mod drivers;
 pub mod gdt;
 pub mod interrupts;
 pub mod memory;
@@ -25,9 +26,16 @@ pub mod vga_buffer;
 /// faults), install the IDT, configure the legacy PIC and unmask hardware
 /// interrupts.
 pub fn init() {
+    use core::sync::atomic::Ordering;
+
     gdt::init();
     interrupts::init_idt();
     unsafe { interrupts::PICS.lock().initialize() };
+    // Reprogram the PIT to a saner 100 Hz so `uptime` divides cleanly into
+    // wall-clock seconds. This is done *before* `sti` so the very first
+    // IRQ0 already arrives at the new rate.
+    let actual_hz = drivers::pit::set_frequency(100);
+    interrupts::TIMER_HZ_BITS.store(actual_hz.to_bits(), Ordering::Relaxed);
     x86_64::instructions::interrupts::enable();
 }
 
