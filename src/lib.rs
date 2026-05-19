@@ -16,6 +16,7 @@ pub mod gdt;
 pub mod interrupts;
 pub mod memory;
 pub mod serial;
+pub mod task;
 pub mod vga_buffer;
 
 /// One-time kernel initialisation: load the GDT (with its IST stack for double
