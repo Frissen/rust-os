@@ -1,12 +1,19 @@
-// Async PS/2 mouse pipeline. The IRQ12 handler pushes raw bytes into a
-// lock-free queue; this module owns the stream consumer that reassembles
-// 3-byte packets, decodes deltas, and moves the on-screen cursor by
-// inverting the colour of the cell underneath it.
+// Async PS/2 mouse pipeline.
 //
-// Mirrors the structure of `task::keyboard` so the same waker/queue
-// idioms apply.
+// The IRQ12 handler pushes raw bytes into a lock-free queue. This module
+// owns the consumer that reassembles 3-byte packets, decodes deltas,
+// updates the on-screen cursor (by inverting the colour of the cell the
+// cursor is over), and dispatches click events to the desktop / start
+// menu.
+//
+// The cursor compositor exposes `lift_cursor` and `restore_cursor` so
+// overlay surfaces (e.g. the Start menu) can temporarily hide the cursor
+// while they paint underneath it.
 
-use crate::vga_buffer::{self, ColorCode};
+use crate::{
+    desktop, start_menu,
+    vga_buffer::{self, Color, ColorCode},
+};
 use conquer_once::spin::OnceCell;
 use core::{
     pin::Pin,
@@ -50,9 +57,7 @@ impl MouseByteStream {
 impl Stream for MouseByteStream {
     type Item = u8;
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<u8>> {
-        let q = MOUSE_QUEUE
-            .try_get()
-            .expect("mouse queue not initialized");
+        let q = MOUSE_QUEUE.try_get().expect("mouse queue not initialized");
         if let Some(b) = q.pop() {
             return Poll::Ready(Some(b));
         }
@@ -67,15 +72,14 @@ impl Stream for MouseByteStream {
     }
 }
 
-#[derive(Default)]
 struct CursorState {
     /// Current column on the VGA buffer (0..80).
     x: u8,
     /// Current row on the VGA buffer (0..25).
     y: u8,
-    /// Last button bitmask read from the controller. Bit 0 = L, 1 = R, 2 = M.
+    /// Last button bitmask read from the controller (bit 0 = L, 1 = R, 2 = M).
     buttons: u8,
-    /// Whether `saved` is meaningful (i.e. we've painted the cursor once).
+    /// Whether `saved_*` is meaningful (i.e. we have already painted once).
     has_saved: bool,
     /// What was under the cursor at (x, y) before we inverted it.
     saved_ch: u8,
@@ -95,20 +99,17 @@ static CURSOR: Mutex<CursorState> = Mutex::new(CursorState {
 /// 3-byte packets, and updates the screen cursor. Never returns.
 pub async fn run() {
     let mut stream = MouseByteStream::new();
-    // Paint cursor once at boot at its initial position.
     redraw_cursor_at(40, 12);
 
-    let mut state: u8 = 0; // 0 = waiting for header byte, 1 = waiting dx, 2 = waiting dy
+    let mut state: u8 = 0; // 0 = wait header, 1 = wait dx, 2 = wait dy
     let mut header: u8 = 0;
     let mut dx_byte: u8 = 0;
 
     while let Some(b) = stream.next().await {
         match state {
             0 => {
-                // Header must have bit 3 set (the "always one" sync bit).
                 if b & 0x08 == 0 {
-                    // Out of sync — drop this byte and keep waiting.
-                    continue;
+                    continue; // out of sync — drop
                 }
                 header = b;
                 state = 1;
@@ -120,7 +121,6 @@ pub async fn run() {
             _ => {
                 let dy_byte = b;
                 state = 0;
-                // Sign-extend.
                 let dx: i32 = if header & 0x10 != 0 {
                     (dx_byte as i32) - 0x100
                 } else {
@@ -131,7 +131,6 @@ pub async fn run() {
                 } else {
                     dy_byte as i32
                 };
-                // Mouse Y is "up positive" — invert for screen coords.
                 let dy = -dy_raw;
                 let buttons = header & 0x07;
                 apply_packet(dx, dy, buttons);
@@ -141,39 +140,74 @@ pub async fn run() {
 }
 
 fn apply_packet(dx: i32, dy: i32, buttons: u8) {
-    let mut cur = CURSOR.lock();
+    // Compute the click event under the cursor lock, then drop the lock
+    // *before* dispatching so handlers can take their own locks (Writer,
+    // start_menu MENU, etc.) without deadlocking.
+    let dispatch_click_at: Option<(u8, u8)> = {
+        let mut cur = CURSOR.lock();
+        let was_buttons = cur.buttons;
 
-    let new_x = (cur.x as i32 + dx).clamp(0, (vga_buffer::BUFFER_WIDTH as i32) - 1) as u8;
-    let new_y = (cur.y as i32 + dy).clamp(0, (vga_buffer::BUFFER_HEIGHT as i32) - 1) as u8;
+        let new_x = (cur.x as i32 + dx).clamp(0, (vga_buffer::BUFFER_WIDTH as i32) - 1) as u8;
+        let new_y = (cur.y as i32 + dy).clamp(0, (vga_buffer::BUFFER_HEIGHT as i32) - 1) as u8;
 
-    let moved = new_x != cur.x || new_y != cur.y;
-    let button_changed = buttons != cur.buttons;
-    cur.buttons = buttons;
+        let moved = new_x != cur.x || new_y != cur.y;
+        cur.buttons = buttons;
 
-    if moved || !cur.has_saved {
-        // Restore what was under the previous cursor.
-        if cur.has_saved {
-            interrupts::without_interrupts(|| {
-                vga_buffer::WRITER.lock().put_cell_raw(
-                    cur.y as usize,
-                    cur.x as usize,
-                    cur.saved_ch,
-                    ColorCode::from_raw(cur.saved_code),
-                );
+        if moved || !cur.has_saved {
+            if cur.has_saved {
+                interrupts::without_interrupts(|| {
+                    vga_buffer::WRITER.lock().put_cell_raw(
+                        cur.y as usize,
+                        cur.x as usize,
+                        cur.saved_ch,
+                        ColorCode::from_raw(cur.saved_code),
+                    );
+                });
+            }
+            let (ch, code) = interrupts::without_interrupts(|| {
+                vga_buffer::WRITER
+                    .lock()
+                    .read_cell(new_y as usize, new_x as usize)
             });
+            cur.saved_ch = ch;
+            cur.saved_code = code.raw();
+            cur.has_saved = true;
+            cur.x = new_x;
+            cur.y = new_y;
+            paint_cursor(&cur);
+        } else if buttons != was_buttons {
+            paint_cursor(&cur);
         }
-        // Save what's under the new cursor.
-        let (ch, code) =
-            interrupts::without_interrupts(|| vga_buffer::WRITER.lock().read_cell(new_y as usize, new_x as usize));
-        cur.saved_ch = ch;
-        cur.saved_code = code.raw();
-        cur.has_saved = true;
-        cur.x = new_x;
-        cur.y = new_y;
-        paint_cursor(&cur);
-    } else if button_changed {
-        // Re-paint to reflect new button state (highlight colour).
-        paint_cursor(&cur);
+
+        // Detect a left-button click (0 -> 1 transition).
+        if buttons & 1 != 0 && was_buttons & 1 == 0 {
+            Some((cur.x, cur.y))
+        } else {
+            None
+        }
+    };
+
+    if let Some((x, y)) = dispatch_click_at {
+        dispatch_click(x, y);
+    }
+}
+
+fn dispatch_click(x: u8, y: u8) {
+    let xu = x as usize;
+    let yu = y as usize;
+
+    // If the menu is already open, let it handle / consume the click first.
+    if start_menu::is_open() {
+        let _consumed = start_menu::handle_click(x, y);
+        return;
+    }
+
+    // Click on the Start button area on the taskbar?
+    if yu == desktop::TASKBAR_ROW
+        && xu >= desktop::START_BTN_LEFT
+        && xu <= desktop::START_BTN_RIGHT
+    {
+        start_menu::toggle();
     }
 }
 
@@ -182,8 +216,7 @@ fn paint_cursor(cur: &CursorState) {
         let mut w = vga_buffer::WRITER.lock();
         let saved_code = ColorCode::from_raw(cur.saved_code);
         let painted_code = if cur.buttons & 0x07 != 0 {
-            // Any button pressed — make the cursor flash white-on-red.
-            ColorCode::new(vga_buffer::Color::White, vga_buffer::Color::Red)
+            ColorCode::new(Color::White, Color::Red)
         } else {
             saved_code.invert()
         };
@@ -191,9 +224,6 @@ fn paint_cursor(cur: &CursorState) {
     });
 }
 
-/// Paint the cursor at an explicit position from outside the mouse task
-/// (used once at boot before any IRQs arrive, to make the cursor visible
-/// even without movement).
 fn redraw_cursor_at(x: u8, y: u8) {
     let (ch, code) = interrupts::without_interrupts(|| {
         vga_buffer::WRITER.lock().read_cell(y as usize, x as usize)
@@ -205,4 +235,41 @@ fn redraw_cursor_at(x: u8, y: u8) {
     cur.x = x;
     cur.y = y;
     paint_cursor(&cur);
+}
+
+// ----------- Public cursor compositor hooks for overlay surfaces -----------
+
+/// Restore whatever was under the cursor so an overlay surface can paint
+/// without smearing the cursor. The cursor is left "lifted" — its
+/// `has_saved` flag is cleared. Pair with `restore_cursor` once the
+/// overlay has finished painting.
+pub fn lift_cursor() {
+    interrupts::without_interrupts(|| {
+        let mut cur = CURSOR.lock();
+        if cur.has_saved {
+            let mut w = vga_buffer::WRITER.lock();
+            w.put_cell_raw(
+                cur.y as usize,
+                cur.x as usize,
+                cur.saved_ch,
+                ColorCode::from_raw(cur.saved_code),
+            );
+            cur.has_saved = false;
+        }
+    });
+}
+
+/// Re-snapshot the cell under the current cursor position and paint the
+/// cursor on top. Counterpart to `lift_cursor`.
+pub fn restore_cursor() {
+    interrupts::without_interrupts(|| {
+        let mut cur = CURSOR.lock();
+        let (ch, code) = vga_buffer::WRITER
+            .lock()
+            .read_cell(cur.y as usize, cur.x as usize);
+        cur.saved_ch = ch;
+        cur.saved_code = code.raw();
+        cur.has_saved = true;
+        paint_cursor(&cur);
+    });
 }

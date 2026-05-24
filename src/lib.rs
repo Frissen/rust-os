@@ -19,6 +19,7 @@ pub mod interrupts;
 pub mod memory;
 pub mod serial;
 pub mod shell;
+pub mod start_menu;
 pub mod task;
 pub mod vfs;
 pub mod vga_buffer;

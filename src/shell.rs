@@ -23,8 +23,8 @@ use core::sync::atomic::Ordering;
 use futures_util::stream::StreamExt;
 use pc_keyboard::{layouts, DecodedKey, HandleControl, KeyCode, Keyboard, ScancodeSet1};
 
-const PROMPT: &str = "AiOC> ";
-const KERNEL_NAME: &str = "AiOC";
+const PROMPT: &str = "$ ";
+const KERNEL_NAME: &str = "console";
 const KERNEL_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Hard cap on input line length. Keeps the line editor's buffer small and
@@ -92,8 +92,8 @@ pub async fn run() {
 }
 
 fn print_banner() {
-    println!("{} {} -- type 'help' for commands", KERNEL_NAME, KERNEL_VERSION);
-    println!("(c) 2026 - x86_64 kernel in Rust");
+    println!("{} {} - type 'help' for commands", KERNEL_NAME, KERNEL_VERSION);
+    println!("click 'Start' on the taskbar to open the system menu.");
     println!();
 }
 
@@ -130,14 +130,14 @@ fn dispatch(line: &str) {
         "rm" => cmd_rm(&args),
         "cd" => cmd_cd(&args),
         "write" => cmd_write(&args),
-        other => println!("aioc: {}: command not found (try 'help')", other),
+        other => println!("sh: {}: command not found (try 'help')", other),
     }
 }
 
 // ---------- Commands ----------
 
 fn cmd_help() {
-    println!("AiOC commands:");
+    println!("available commands:");
     println!("  help, clear, echo, uname [-a], mem, uptime, date");
     println!("  pwd, ls [p], cd <p>, cat <p>, mkdir <p>, touch <p>");
     println!("  write <p> <txt>, rm [-r] <p>");

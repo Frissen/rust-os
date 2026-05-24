@@ -31,7 +31,7 @@ entry_point!(kernel_main);
 fn kernel_main(boot_info: &'static BootInfo) -> ! {
     // Headline on serial — handy for `make run-headless` where the splash
     // wouldn't be visible anyway.
-    serial_println!("AiOC booting (serial)...");
+    serial_println!("kernel booting (serial)...");
 
     // Stage 1 — interrupts. Must come first so we don't triple-fault on the
     // first page-fault while wiring up the heap. This also enables `sti` so
@@ -91,7 +91,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
         desktop::CONTENT_WIDTH,
         desktop::CONTENT_HEIGHT,
     );
-    vga_buffer::set_color(vga_buffer::Color::White, vga_buffer::Color::Blue);
+    vga_buffer::set_color(vga_buffer::Color::LightGray, vga_buffer::Color::Black);
 
     serial_println!("kernel initialised");
 
@@ -114,7 +114,7 @@ fn panic(info: &PanicInfo) -> ! {
     // isn't clipped to the shell window's geometry.
     vga_buffer::reset_region();
     vga_buffer::set_color(vga_buffer::Color::White, vga_buffer::Color::Red);
-    rust_os::println!("\n[AiOC panic] {}", info);
+    rust_os::println!("\n[panic] {}", info);
     rust_os::hlt_loop();
 }
 
