@@ -47,6 +47,21 @@ impl ColorCode {
     pub fn new(foreground: Color, background: Color) -> ColorCode {
         ColorCode((background as u8) << 4 | (foreground as u8))
     }
+
+    pub fn raw(self) -> u8 {
+        self.0
+    }
+
+    pub fn from_raw(b: u8) -> Self {
+        ColorCode(b)
+    }
+
+    /// Swap foreground and background nibbles — used by the mouse cursor to
+    /// highlight whichever cell it's currently hovering without losing the
+    /// underlying character.
+    pub fn invert(self) -> Self {
+        ColorCode((self.0 << 4) | (self.0 >> 4))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -302,6 +317,29 @@ impl Writer {
             self.put_cell(r, col, V, fg, bg);
             self.put_cell(r, last_col, V, fg, bg);
         }
+    }
+
+    /// Read the current contents of one cell. Returns `(ascii, color_code)`
+    /// or `(b' ', default)` for out-of-bounds reads. Used by the mouse
+    /// cursor compositor to save what's underneath it before painting.
+    pub fn read_cell(&self, row: usize, col: usize) -> (u8, ColorCode) {
+        if row >= BUFFER_HEIGHT || col >= BUFFER_WIDTH {
+            return (b' ', ColorCode::new(Color::White, Color::Black));
+        }
+        let c = self.buffer.chars[row][col].read();
+        (c.ascii_character, c.color_code)
+    }
+
+    /// Write a raw cell back to the buffer (used to restore what was under
+    /// the mouse cursor when it moves on).
+    pub fn put_cell_raw(&mut self, row: usize, col: usize, ch: u8, code: ColorCode) {
+        if row >= BUFFER_HEIGHT || col >= BUFFER_WIDTH {
+            return;
+        }
+        self.buffer.chars[row][col].write(ScreenChar {
+            ascii_character: ch,
+            color_code: code,
+        });
     }
 
     /// Draw a single CP437 horizontal divider ╠═══╣ across the given row.

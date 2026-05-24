@@ -56,6 +56,9 @@ pub async fn run() {
                 serial_println!("$ {}", line);
                 dispatch(line.trim());
                 line.clear();
+                // The status bar tracks the VFS cwd; refresh after each
+                // command in case it (or anything else) just mutated.
+                desktop::paint_status_bar();
                 redraw_prompt();
             }
             DecodedKey::Unicode('\u{8}') => {
@@ -349,7 +352,9 @@ pub async fn clock_task() {
     let mut ticks = SecondStream::new();
     // Paint once up front so the clock isn't blank for the first second.
     desktop::paint_clock();
+    desktop::paint_tray();
     while let Some(_) = ticks.next().await {
         desktop::paint_clock();
+        desktop::paint_tray();
     }
 }

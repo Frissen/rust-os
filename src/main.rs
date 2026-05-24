@@ -38,9 +38,9 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     // the splash's wall-clock delay actually advances.
     rust_os::init();
 
-    // Stage 2 — boot splash. Brief brand moment before the desktop comes up.
-    desktop::paint_splash();
-    desktop::delay_ms(900);
+    // Stage 2 — boot splash. Brief brand moment with an animated loading
+    // bar before the desktop comes up.
+    desktop::run_splash(1200);
 
     // Stage 3 — memory: build a usable view of the page tables and a frame
     // allocator over the BIOS memory map.
@@ -95,12 +95,14 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 
     serial_println!("kernel initialised");
 
-    // Hand control to the cooperative executor with two root tasks:
-    // - shell::run         the interactive line editor
-    // - shell::clock_task  refreshes the taskbar clock once a second
+    // Hand control to the cooperative executor with three root tasks:
+    // - shell::run               the interactive line editor
+    // - shell::clock_task        refreshes the taskbar clock and tray
+    // - rust_os::task::mouse::run drives the PS/2 mouse cursor
     let mut executor = Executor::new();
     executor.spawn(Task::new(shell::run()));
     executor.spawn(Task::new(shell::clock_task()));
+    executor.spawn(Task::new(rust_os::task::mouse::run()));
     executor.run();
 }
 

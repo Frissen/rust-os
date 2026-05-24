@@ -18,6 +18,7 @@ use core::{
 
 pub mod executor;
 pub mod keyboard;
+pub mod mouse;
 pub mod tick;
 
 /// Process-id–like handle for a task. Just a strictly increasing counter; we

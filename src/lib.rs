@@ -37,6 +37,8 @@ pub fn init() {
     // IRQ0 already arrives at the new rate.
     let actual_hz = drivers::pit::set_frequency(100);
     interrupts::TIMER_HZ_BITS.store(actual_hz.to_bits(), Ordering::Relaxed);
+    // Enable the PS/2 mouse so IRQ12 is armed before we unmask interrupts.
+    drivers::mouse::init();
     x86_64::instructions::interrupts::enable();
 }
 
