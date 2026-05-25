@@ -6,7 +6,10 @@ KERNEL_BIN := target/x86_64-rust_os/debug/bootimage-rust_os.bin
 QEMU_ARGS := \
 	-drive format=raw,file=$(KERNEL_BIN) \
 	-serial stdio \
-	-no-reboot
+	-no-reboot \
+	-netdev user,id=u1 \
+	-device rtl8139,netdev=u1 \
+	-object filter-dump,id=f1,netdev=u1,file=/tmp/qemu-net.pcap
 
 .PHONY: setup build run run-headless test clean
 

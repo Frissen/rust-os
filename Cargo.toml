@@ -20,6 +20,20 @@ crossbeam-queue = { version = "0.3", default-features = false, features = ["allo
 conquer-once = { version = "0.4", default-features = false }
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 
+# Pure-Rust no_std TCP/IP stack. We feed it raw Ethernet frames from our
+# rtl8139 driver, and use its built-in DHCP, TCP and UDP sockets to talk
+# to the outside world via QEMU's slirp user-mode network.
+smoltcp = { version = "0.10", default-features = false, features = [
+    "alloc",
+    "medium-ethernet",
+    "proto-ipv4",
+    "proto-dhcpv4",
+    "socket-tcp",
+    "socket-udp",
+    "socket-dhcpv4",
+    "socket-dns",
+] }
+
 [dependencies.lazy_static]
 version = "1.4.0"
 features = ["spin_no_std"]

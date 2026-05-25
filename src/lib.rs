@@ -12,12 +12,16 @@ extern crate alloc;
 use core::panic::PanicInfo;
 
 pub mod allocator;
+pub mod browser;
+pub mod desktop;
 pub mod drivers;
 pub mod gdt;
 pub mod interrupts;
 pub mod memory;
+pub mod net;
 pub mod serial;
 pub mod shell;
+pub mod start_menu;
 pub mod task;
 pub mod vfs;
 pub mod vga_buffer;
@@ -36,6 +40,8 @@ pub fn init() {
     // IRQ0 already arrives at the new rate.
     let actual_hz = drivers::pit::set_frequency(100);
     interrupts::TIMER_HZ_BITS.store(actual_hz.to_bits(), Ordering::Relaxed);
+    // Enable the PS/2 mouse so IRQ12 is armed before we unmask interrupts.
+    drivers::mouse::init();
     x86_64::instructions::interrupts::enable();
 }
 

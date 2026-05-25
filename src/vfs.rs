@@ -78,11 +78,11 @@ impl Fs {
         let mut etc = BTreeMap::new();
         etc.insert(
             "hostname".to_string(),
-            Node::new_file(b"luxx-vm\n"),
+            Node::new_file(b"vm\n"),
         );
         etc.insert(
             "motd".to_string(),
-            Node::new_file(b"Welcome to LUXX-OS in-memory VFS.\nRoot is /.\n"),
+            Node::new_file(b"in-memory VFS. root is /. type 'help' for commands.\n"),
         );
         root.insert("etc".to_string(), Node::Dir(etc));
         root.insert("home".to_string(), Node::Dir(BTreeMap::new()));

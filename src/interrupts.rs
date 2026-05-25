@@ -43,6 +43,8 @@ pub static PICS: spin::Mutex<ChainedPics> =
 pub enum InterruptIndex {
     Timer = PIC_1_OFFSET,
     Keyboard,
+    // IRQ12 — auxiliary PS/2 device (the mouse). Vector = PIC_2_OFFSET + 4.
+    Mouse = PIC_2_OFFSET + 4,
 }
 
 impl InterruptIndex {
@@ -70,6 +72,7 @@ lazy_static! {
 
         idt[InterruptIndex::Timer.as_usize()].set_handler_fn(timer_interrupt_handler);
         idt[InterruptIndex::Keyboard.as_usize()].set_handler_fn(keyboard_interrupt_handler);
+        idt[InterruptIndex::Mouse.as_usize()].set_handler_fn(mouse_interrupt_handler);
         idt
     };
 }
@@ -107,11 +110,31 @@ extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFr
     // No printing here — keep ISR fast so the shell prompt stays clean. The
     // `uptime` command reads this counter to report elapsed time.
     TICKS.fetch_add(1, Ordering::Relaxed);
+    // Wake the desktop clock task once a second (wait-free).
+    crate::task::tick::notify_tick();
+    // Advance the network stack's millisecond clock (PIT is 100 Hz → 10 ms).
+    crate::net::tick_ms(10);
     // The PIC won't deliver another timer IRQ until we explicitly acknowledge
     // this one with an End-Of-Interrupt.
     unsafe {
         PICS.lock()
             .notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
+    }
+}
+
+extern "x86-interrupt" fn mouse_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    use x86_64::instructions::port::Port;
+
+    // Each byte of the 3-byte packet generates its own IRQ12. We grab the
+    // single byte and let the async pipeline reassemble packets.
+    let mut port: Port<u8> = Port::new(0x60);
+    let byte: u8 = unsafe { port.read() };
+    crate::task::mouse::add_byte(byte);
+
+    // Mouse lives on PIC2 — both PICs need the EOI in a cascade chain.
+    unsafe {
+        PICS.lock()
+            .notify_end_of_interrupt(InterruptIndex::Mouse.as_u8());
     }
 }
 

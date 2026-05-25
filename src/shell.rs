@@ -9,12 +9,13 @@
 // line editor — see `dispatch` for the registry.
 
 use crate::{
-    allocator,
+    allocator, browser, desktop,
     drivers::rtc,
     interrupts::{timer_hz, TICKS},
     memory::TOTAL_USABLE_BYTES,
+    net::{self, LinkState},
     print, println, serial_println,
-    task::keyboard::ScancodeStream,
+    task::{keyboard::ScancodeStream, tick::SecondStream},
     vfs::{self, FS},
     vga_buffer,
 };
@@ -23,8 +24,8 @@ use core::sync::atomic::Ordering;
 use futures_util::stream::StreamExt;
 use pc_keyboard::{layouts, DecodedKey, HandleControl, KeyCode, Keyboard, ScancodeSet1};
 
-const PROMPT: &str = "luxx> ";
-const KERNEL_NAME: &str = "LUXX-OS";
+const PROMPT: &str = "$ ";
+const KERNEL_NAME: &str = "console";
 const KERNEL_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Hard cap on input line length. Keeps the line editor's buffer small and
@@ -50,12 +51,39 @@ pub async fn run() {
             None => continue,
         };
 
+        // The browser app, when open, gets first crack at every keystroke.
+        // It only consumes printable Unicode + Enter/Backspace/Escape; the
+        // shell stays paused in the background.
+        if browser::is_open() {
+            match key {
+                DecodedKey::Unicode('\u{1b}') => {
+                    browser::close();
+                    leave_browser_mode();
+                }
+                DecodedKey::Unicode(c) => {
+                    browser::handle_char(c);
+                }
+                DecodedKey::RawKey(KeyCode::Escape) => {
+                    browser::close();
+                    leave_browser_mode();
+                }
+                DecodedKey::RawKey(KeyCode::Backspace) => {
+                    browser::handle_char('\u{8}');
+                }
+                DecodedKey::RawKey(_) => {}
+            }
+            continue;
+        }
+
         match key {
             DecodedKey::Unicode('\n') => {
                 println!();
                 serial_println!("$ {}", line);
                 dispatch(line.trim());
                 line.clear();
+                // The status bar tracks the VFS cwd; refresh after each
+                // command in case it (or anything else) just mutated.
+                desktop::paint_status_bar();
                 redraw_prompt();
             }
             DecodedKey::Unicode('\u{8}') => {
@@ -89,8 +117,9 @@ pub async fn run() {
 }
 
 fn print_banner() {
+    println!("{} {} - type 'help' for commands", KERNEL_NAME, KERNEL_VERSION);
+    println!("click 'Start' on the taskbar to open the system menu.");
     println!();
-    println!("{} {} -- type 'help' for commands", KERNEL_NAME, KERNEL_VERSION);
 }
 
 fn redraw_prompt() {
@@ -126,32 +155,47 @@ fn dispatch(line: &str) {
         "rm" => cmd_rm(&args),
         "cd" => cmd_cd(&args),
         "write" => cmd_write(&args),
-        other => println!("luxx: {}: command not found (try 'help')", other),
+        "browser" | "www" => cmd_browser(),
+        "ip" | "ifconfig" => cmd_ip(),
+        other => println!("sh: {}: command not found (try 'help')", other),
     }
 }
 
 // ---------- Commands ----------
 
 fn cmd_help() {
-    println!("Built-in commands:");
-    println!("  help                this list");
-    println!("  clear               clear the screen");
-    println!("  echo <args...>      print arguments");
-    println!("  uname [-a]          print kernel info");
-    println!("  mem                 show RAM and heap usage");
-    println!("  uptime              time since boot");
-    println!("  date                wall-clock time from CMOS RTC");
-    println!("  pwd                 print current directory");
-    println!("  ls [path]           list directory contents");
-    println!("  cd <path>           change current directory");
-    println!("  cat <path>          print file contents");
-    println!("  mkdir <path>        create a directory");
-    println!("  touch <path>        create an empty file");
-    println!("  write <path> <txt>  write text into a file");
-    println!("  rm [-r] <path>      remove a file or directory");
-    println!("  int3                fire a software breakpoint exception");
-    println!("  panic [msg]         deliberately panic the kernel");
-    println!("  reboot              reset the machine");
+    println!("available commands:");
+    println!("  help, clear, echo, uname [-a], mem, uptime, date");
+    println!("  pwd, ls [p], cd <p>, cat <p>, mkdir <p>, touch <p>");
+    println!("  write <p> <txt>, rm [-r] <p>");
+    println!("  browser, ip, int3, panic [msg], reboot");
+}
+
+fn cmd_browser() {
+    browser::open();
+}
+
+fn cmd_ip() {
+    match net::link_state() {
+        LinkState::NoNic => println!("no nic on pci bus"),
+        LinkState::Dhcp => println!("acquiring dhcp lease..."),
+        LinkState::Up { ip, gateway } => {
+            println!("ip:      {}", ip);
+            if let Some(gw) = gateway {
+                println!("gateway: {}", gw);
+            }
+        }
+    }
+}
+
+/// Clear the shell-window content area and reprint a fresh banner+prompt.
+/// Called after the browser closes so the shell isn't visually corrupted
+/// by leftover URL bars / status lines.
+fn leave_browser_mode() {
+    vga_buffer::clear_screen();
+    desktop::paint_status_bar();
+    print_banner();
+    redraw_prompt();
 }
 
 fn cmd_clear() {
@@ -351,5 +395,20 @@ fn cmd_write(args: &[&str]) {
     let contents = args[1..].join(" ");
     if let Err(e) = FS.lock().write_file(path, contents.as_bytes()) {
         println!("write: {}: {}", path, e.description());
+    }
+}
+
+// ---------- Background tasks ----------
+
+/// Re-paints the taskbar clock once per second. Spawned alongside the shell
+/// task from `kernel_main`. Never returns.
+pub async fn clock_task() {
+    let mut ticks = SecondStream::new();
+    // Paint once up front so the clock isn't blank for the first second.
+    desktop::paint_clock();
+    desktop::paint_tray();
+    while let Some(_) = ticks.next().await {
+        desktop::paint_clock();
+        desktop::paint_tray();
     }
 }
