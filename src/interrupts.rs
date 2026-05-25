@@ -112,6 +112,8 @@ extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFr
     TICKS.fetch_add(1, Ordering::Relaxed);
     // Wake the desktop clock task once a second (wait-free).
     crate::task::tick::notify_tick();
+    // Advance the network stack's millisecond clock (PIT is 100 Hz → 10 ms).
+    crate::net::tick_ms(10);
     // The PIC won't deliver another timer IRQ until we explicitly acknowledge
     // this one with an End-Of-Interrupt.
     unsafe {

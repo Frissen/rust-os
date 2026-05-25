@@ -9,10 +9,11 @@
 // line editor — see `dispatch` for the registry.
 
 use crate::{
-    allocator, desktop,
+    allocator, browser, desktop,
     drivers::rtc,
     interrupts::{timer_hz, TICKS},
     memory::TOTAL_USABLE_BYTES,
+    net::{self, LinkState},
     print, println, serial_println,
     task::{keyboard::ScancodeStream, tick::SecondStream},
     vfs::{self, FS},
@@ -49,6 +50,30 @@ pub async fn run() {
             Some(k) => k,
             None => continue,
         };
+
+        // The browser app, when open, gets first crack at every keystroke.
+        // It only consumes printable Unicode + Enter/Backspace/Escape; the
+        // shell stays paused in the background.
+        if browser::is_open() {
+            match key {
+                DecodedKey::Unicode('\u{1b}') => {
+                    browser::close();
+                    leave_browser_mode();
+                }
+                DecodedKey::Unicode(c) => {
+                    browser::handle_char(c);
+                }
+                DecodedKey::RawKey(KeyCode::Escape) => {
+                    browser::close();
+                    leave_browser_mode();
+                }
+                DecodedKey::RawKey(KeyCode::Backspace) => {
+                    browser::handle_char('\u{8}');
+                }
+                DecodedKey::RawKey(_) => {}
+            }
+            continue;
+        }
 
         match key {
             DecodedKey::Unicode('\n') => {
@@ -130,6 +155,8 @@ fn dispatch(line: &str) {
         "rm" => cmd_rm(&args),
         "cd" => cmd_cd(&args),
         "write" => cmd_write(&args),
+        "browser" | "www" => cmd_browser(),
+        "ip" | "ifconfig" => cmd_ip(),
         other => println!("sh: {}: command not found (try 'help')", other),
     }
 }
@@ -141,7 +168,34 @@ fn cmd_help() {
     println!("  help, clear, echo, uname [-a], mem, uptime, date");
     println!("  pwd, ls [p], cd <p>, cat <p>, mkdir <p>, touch <p>");
     println!("  write <p> <txt>, rm [-r] <p>");
-    println!("  int3, panic [msg], reboot");
+    println!("  browser, ip, int3, panic [msg], reboot");
+}
+
+fn cmd_browser() {
+    browser::open();
+}
+
+fn cmd_ip() {
+    match net::link_state() {
+        LinkState::NoNic => println!("no nic on pci bus"),
+        LinkState::Dhcp => println!("acquiring dhcp lease..."),
+        LinkState::Up { ip, gateway } => {
+            println!("ip:      {}", ip);
+            if let Some(gw) = gateway {
+                println!("gateway: {}", gw);
+            }
+        }
+    }
+}
+
+/// Clear the shell-window content area and reprint a fresh banner+prompt.
+/// Called after the browser closes so the shell isn't visually corrupted
+/// by leftover URL bars / status lines.
+fn leave_browser_mode() {
+    vga_buffer::clear_screen();
+    desktop::paint_status_bar();
+    print_banner();
+    redraw_prompt();
 }
 
 fn cmd_clear() {

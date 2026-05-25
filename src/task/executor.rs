@@ -126,3 +126,29 @@ impl Wake for TaskWaker {
         self.wake_task();
     }
 }
+
+/// Returns a future that yields once: the first poll re-enqueues the task
+/// and returns `Pending`, the second returns `Ready`. Used by background
+/// tasks that want to play nicely with the rest of the executor without
+/// having a real waker to wait on (e.g. the network polling task).
+pub fn yield_now() -> YieldNow {
+    YieldNow { polled: false }
+}
+
+pub struct YieldNow {
+    polled: bool,
+}
+
+impl core::future::Future for YieldNow {
+    type Output = ();
+
+    fn poll(mut self: core::pin::Pin<&mut Self>, cx: &mut Context) -> Poll<()> {
+        if self.polled {
+            Poll::Ready(())
+        } else {
+            self.polled = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    }
+}

@@ -51,8 +51,8 @@ const TILES: [Tile; 4] = [
         bg: Color::Blue,
     },
     Tile {
-        label: " Files ",
-        icon: "[]",
+        label: "Browser",
+        icon: "www",
         bg: Color::Green,
     },
     Tile {
@@ -142,13 +142,20 @@ pub fn handle_click(x: u8, y: u8) -> bool {
 }
 
 fn on_tile_click(tile: &Tile) {
-    // Print a one-line hint into the shell so the user sees feedback.
-    // The shell prompt will be redrawn by the line editor after Enter, so
-    // we just inject a newline before the hint to keep the visible cursor
-    // tidy.
-    println!();
-    print!("[menu] launching `{}` (not yet wired)", tile.label.trim());
-    println!();
+    match tile.label.trim() {
+        "Browser" => crate::browser::open(),
+        "Console" => {
+            // Already there — just leave a marker so the user sees feedback.
+            println!();
+            print!("[menu] focusing console");
+            println!();
+        }
+        other => {
+            println!();
+            print!("[menu] `{}` is not yet wired", other);
+            println!();
+        }
+    }
 }
 
 fn rect_contains(x: usize, y: usize, rx: usize, ry: usize, rw: usize, rh: usize) -> bool {

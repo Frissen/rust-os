@@ -12,11 +12,13 @@ extern crate alloc;
 use core::panic::PanicInfo;
 
 pub mod allocator;
+pub mod browser;
 pub mod desktop;
 pub mod drivers;
 pub mod gdt;
 pub mod interrupts;
 pub mod memory;
+pub mod net;
 pub mod serial;
 pub mod shell;
 pub mod start_menu;

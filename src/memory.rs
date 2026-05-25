@@ -14,6 +14,7 @@
 
 use bootloader::bootinfo::{MemoryMap, MemoryRegionType};
 use core::sync::atomic::{AtomicU64, Ordering};
+use spin::Mutex;
 use x86_64::{
     registers::control::Cr3,
     structures::paging::{
@@ -31,6 +32,70 @@ pub static TOTAL_USABLE_BYTES: AtomicU64 = AtomicU64::new(0);
 /// once, after the frame allocator is initialised.
 pub fn record_stats(allocator: &BootInfoFrameAllocator) {
     TOTAL_USABLE_BYTES.store(allocator.total_usable_bytes(), Ordering::Relaxed);
+}
+
+/// Virtual offset at which the bootloader has identity-mapped all physical
+/// RAM. Stored at boot by `install_dma_allocator` so anything that needs to
+/// translate a `PhysAddr` to a usable `VirtAddr` can do so without touching
+/// the page tables.
+static PHYS_OFFSET: AtomicU64 = AtomicU64::new(0);
+
+/// Frame allocator that survives past kernel init so the network driver can
+/// allocate DMA-friendly buffers after the heap is up. Optional because it
+/// isn't installed until `install_dma_allocator` runs.
+static DMA_ALLOC: Mutex<Option<BootInfoFrameAllocator>> = Mutex::new(None);
+
+/// Bottle the kernel's `BootInfoFrameAllocator` + `physical_memory_offset`
+/// behind a `Mutex` so post-init code (e.g. the rtl8139 driver) can pull
+/// fresh physical frames for DMA buffers.
+pub fn install_dma_allocator(allocator: BootInfoFrameAllocator, phys_offset: VirtAddr) {
+    PHYS_OFFSET.store(phys_offset.as_u64(), Ordering::Relaxed);
+    *DMA_ALLOC.lock() = Some(allocator);
+}
+
+/// Virtual address at which physical address 0 lives. Returns `None` if
+/// `install_dma_allocator` hasn't been called yet.
+pub fn phys_offset() -> Option<VirtAddr> {
+    let raw = PHYS_OFFSET.load(Ordering::Relaxed);
+    if raw == 0 {
+        None
+    } else {
+        Some(VirtAddr::new(raw))
+    }
+}
+
+/// Allocate `count` physically contiguous 4 KiB frames from the boot frame
+/// allocator. Returns the virtual + physical base addresses of the run.
+///
+/// The bootloader has already identity-mapped all physical memory at
+/// `phys_offset()`, so the returned virtual address can be used directly as
+/// a slice — no extra `map_to` work is required.
+///
+/// This is best-effort: if the frame allocator hands us non-contiguous
+/// frames (which only happens at memory-map region boundaries), we return
+/// an error. The caller should treat that as a fatal init failure.
+pub fn alloc_contiguous_frames(count: usize) -> Result<(VirtAddr, PhysAddr), &'static str> {
+    let phys_offset = phys_offset().ok_or("phys offset not installed")?;
+    let mut guard = DMA_ALLOC.lock();
+    let allocator = guard.as_mut().ok_or("dma allocator not installed")?;
+
+    let first = allocator
+        .allocate_frame()
+        .ok_or("out of physical frames")?;
+    let mut prev = first;
+    for _ in 1..count {
+        let frame = allocator
+            .allocate_frame()
+            .ok_or("out of physical frames")?;
+        if frame.start_address().as_u64() != prev.start_address().as_u64() + 4096 {
+            return Err("frame allocator returned a non-contiguous run");
+        }
+        prev = frame;
+    }
+
+    let phys = first.start_address();
+    let virt = phys_offset + phys.as_u64();
+    Ok((virt, phys))
 }
 
 /// Build an `OffsetPageTable` rooted at the CPU's current CR3 table.

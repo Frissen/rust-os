@@ -64,6 +64,10 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     // allocator borrow — the shell will read this through a static.
     memory::record_stats(&frame_allocator);
 
+    // Stash the frame allocator + phys offset behind a Mutex so the network
+    // driver can pull DMA-friendly contiguous frames after this point.
+    memory::install_dma_allocator(frame_allocator, phys_mem_offset);
+
     // Smoke-test the allocator end to end. If any of these panic we've broken
     // the heap, and the panic handler will tell us why on screen.
     let boxed = Box::new(0x4242_u32);
@@ -95,14 +99,19 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 
     serial_println!("kernel initialised");
 
-    // Hand control to the cooperative executor with three root tasks:
-    // - shell::run               the interactive line editor
-    // - shell::clock_task        refreshes the taskbar clock and tray
-    // - rust_os::task::mouse::run drives the PS/2 mouse cursor
+    // Stage 6 — network: probe PCI for an rtl8139 NIC and bring smoltcp up.
+    // Non-fatal: if there's no NIC we just keep going without the browser.
+    match rust_os::net::init() {
+        Ok(()) => serial_println!("net: rtl8139 + smoltcp online"),
+        Err(e) => serial_println!("net: disabled ({})", e),
+    }
+
+    // Hand control to the cooperative executor.
     let mut executor = Executor::new();
     executor.spawn(Task::new(shell::run()));
     executor.spawn(Task::new(shell::clock_task()));
     executor.spawn(Task::new(rust_os::task::mouse::run()));
+    executor.spawn(Task::new(rust_os::task::net::run()));
     executor.run();
 }
 
